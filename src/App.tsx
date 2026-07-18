@@ -577,46 +577,66 @@ export default function App() {
 
   // Export User Data as JSON
   const exportData = () => {
-    const dataStr = JSON.stringify({
-      dayProgress,
-      exerciseWeights,
-      completedSetsHistory,
-      hspuLog,
-      mindsetReviews,
-      wholeLifeScores,
-      initialStreaks
-    }, null, 2);
-    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
-    
-    const exportFileDefaultName = `Virtue_Tracker_Backup_${selectedDate}.json`;
-    
-    const linkElement = document.createElement('a');
-    linkElement.setAttribute('href', dataUri);
-    linkElement.setAttribute('download', exportFileDefaultName);
-    linkElement.click();
+    try {
+      const payload = {
+        exportedAt: new Date().toISOString(),
+        dayProgress,
+        exerciseWeights,
+        completedSetsHistory,
+        hspuLog,
+        mindsetReviews,
+        wholeLifeScores,
+        initialStreaks
+      };
+      const dataStr = JSON.stringify(payload, null, 2);
+      const blob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+
+      const exportFileDefaultName = `Virtue_Tracker_Backup_${selectedDate}.json`;
+
+      const linkElement = document.createElement('a');
+      linkElement.href = url;
+      linkElement.download = exportFileDefaultName;
+      document.body.appendChild(linkElement);
+      linkElement.click();
+      document.body.removeChild(linkElement);
+
+      // Release the object URL after the download has had a chance to start.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      alert("Export failed: " + (err instanceof Error ? err.message : String(err)));
+    }
   };
 
   // Import User Data
   const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
     const fileReader = new FileReader();
-    if (e.target.files && e.target.files[0]) {
-      fileReader.readAsText(e.target.files[0], "UTF-8");
-      fileReader.onload = (event) => {
-        try {
-          const parsed = JSON.parse(event.target?.result as string);
-          if (parsed.dayProgress) setDayProgress(parsed.dayProgress);
-          if (parsed.exerciseWeights) setExerciseWeights(parsed.exerciseWeights);
-          if (parsed.completedSetsHistory) setCompletedSetsHistory(parsed.completedSetsHistory);
-          if (parsed.hspuLog) setHspuLog(parsed.hspuLog);
-          if (parsed.mindsetReviews) setMindsetReviews(parsed.mindsetReviews);
-          if (parsed.wholeLifeScores) setWholeLifeScores(parsed.wholeLifeScores);
-          if (parsed.initialStreaks) setInitialStreaks(parsed.initialStreaks);
-          alert("Backup imported successfully!");
-        } catch (err) {
-          alert("Invalid backup file format.");
-        }
-      };
-    }
+    fileReader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target?.result as string);
+        if (parsed.dayProgress) setDayProgress(parsed.dayProgress);
+        if (parsed.exerciseWeights) setExerciseWeights(parsed.exerciseWeights);
+        if (parsed.completedSetsHistory) setCompletedSetsHistory(parsed.completedSetsHistory);
+        if (parsed.hspuLog) setHspuLog(parsed.hspuLog);
+        if (parsed.mindsetReviews) setMindsetReviews(parsed.mindsetReviews);
+        if (parsed.wholeLifeScores) setWholeLifeScores(parsed.wholeLifeScores);
+        if (parsed.initialStreaks) setInitialStreaks(parsed.initialStreaks);
+        alert("Backup imported successfully!");
+      } catch (err) {
+        alert("Invalid backup file format.");
+      } finally {
+        // Reset so selecting the same file again still fires onChange.
+        e.target.value = "";
+      }
+    };
+    fileReader.onerror = () => {
+      alert("Couldn't read that file. Please try again.");
+      e.target.value = "";
+    };
+    fileReader.readAsText(file, "UTF-8");
   };
 
   // Clear all data for Daily Review and reset everything
