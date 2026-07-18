@@ -1,0 +1,6 @@
+{
+  "name": "Virtue Tracker",
+  "description": "A comprehensive tracker for daily Virtues and Vices, including a 5-day superset workout routine with adjustable weights, a daily mindset review, handstand pushup milestones, and AI-guided behavior insights.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
