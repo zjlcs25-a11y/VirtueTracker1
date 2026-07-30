@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Shield, 
@@ -36,6 +36,9 @@ import {
 } from "lucide-react";
 import { VIRTUES, VICES, DEFAULT_WORKOUTS, HSPU_LEVELS, MILESTONES, INITIAL_MINDSET_REVIEW } from "./data";
 import { DailyLog, DayProgress, WorkoutDay, HspuLog, DayMindsetReviews, WholeLifeScores, Exercise, MindsetReview } from "./types";
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut, User } from "firebase/auth";
+import { doc, onSnapshot, setDoc } from "firebase/firestore";
+import { auth, db, isFirebaseConfigured } from "./firebase";
 
 const getEstTodayString = (): string => {
   try {
@@ -85,6 +88,100 @@ export default function App() {
     });
     return defaults;
   });
+
+  // Editable workout schedule - starts from the default program, fully user-editable from here on
+  const [customWorkouts, setCustomWorkouts] = useState<WorkoutDay[]>(() => {
+    const saved = localStorage.getItem("vt_custom_workouts");
+    if (saved) return JSON.parse(saved);
+    return DEFAULT_WORKOUTS;
+  });
+  useEffect(() => {
+    localStorage.setItem("vt_custom_workouts", JSON.stringify(customWorkouts));
+  }, [customWorkouts]);
+
+  // Which schedule day applies to a given date - chosen manually, not locked to the calendar weekday
+  const [workoutDaySelections, setWorkoutDaySelections] = useState<Record<string, number>>(() => {
+    const saved = localStorage.getItem("vt_workout_day_selections");
+    if (saved) return JSON.parse(saved);
+    return {};
+  });
+  useEffect(() => {
+    localStorage.setItem("vt_workout_day_selections", JSON.stringify(workoutDaySelections));
+  }, [workoutDaySelections]);
+
+  // --- CLOUD SYNC (Firebase) ---
+  const [cloudUser, setCloudUser] = useState<User | null>(null);
+  const [cloudAuthChecked, setCloudAuthChecked] = useState<boolean>(false);
+  const [loginEmail, setLoginEmail] = useState<string>("");
+  const [loginPassword, setLoginPassword] = useState<string>("");
+  const [loginError, setLoginError] = useState<string>("");
+  const [loginBusy, setLoginBusy] = useState<boolean>(false);
+  const hasLoadedCloudRef = useRef<boolean>(false);
+
+  // Watch sign-in state
+  useEffect(() => {
+    if (!isFirebaseConfigured) { setCloudAuthChecked(true); return; }
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setCloudUser(u);
+      setCloudAuthChecked(true);
+      hasLoadedCloudRef.current = false;
+    });
+    return () => unsub();
+  }, []);
+
+  // Pull: subscribe to this account's data doc and hydrate local state on every remote change
+  useEffect(() => {
+    if (!isFirebaseConfigured || !cloudUser) return;
+    const ref = doc(db, "users", cloudUser.uid, "appData", "state");
+    const unsub = onSnapshot(ref, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as any;
+        if (data.dayProgress) setDayProgress(data.dayProgress);
+        if (data.exerciseWeights) setExerciseWeights(data.exerciseWeights);
+        if (data.completedSetsHistory) setCompletedSetsHistory(data.completedSetsHistory);
+        if (data.hspuLog) setHspuLog(data.hspuLog);
+        if (data.mindsetReviews) setMindsetReviews(data.mindsetReviews);
+        if (data.wholeLifeScores) setWholeLifeScores(data.wholeLifeScores);
+        if (data.initialStreaks) setInitialStreaks(data.initialStreaks);
+        if (data.customWorkouts) setCustomWorkouts(data.customWorkouts);
+        if (data.workoutDaySelections) setWorkoutDaySelections(data.workoutDaySelections);
+      }
+      hasLoadedCloudRef.current = true;
+    });
+    return () => unsub();
+  }, [cloudUser]);
+
+  // Push: whenever local data changes (after the initial cloud load), write it back up, debounced
+  useEffect(() => {
+    if (!isFirebaseConfigured || !cloudUser || !hasLoadedCloudRef.current) return;
+    const ref = doc(db, "users", cloudUser.uid, "appData", "state");
+    const t = setTimeout(() => {
+      setDoc(ref, {
+        dayProgress, exerciseWeights, completedSetsHistory, hspuLog,
+        mindsetReviews, wholeLifeScores, initialStreaks, customWorkouts, workoutDaySelections,
+        updatedAt: new Date().toISOString()
+      }).catch(() => {});
+    }, 800);
+    return () => clearTimeout(t);
+  }, [cloudUser, dayProgress, exerciseWeights, completedSetsHistory, hspuLog, mindsetReviews, wholeLifeScores, initialStreaks, customWorkouts, workoutDaySelections]);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError("");
+    setLoginBusy(true);
+    try {
+      await signInWithEmailAndPassword(auth, loginEmail.trim(), loginPassword);
+    } catch (err: any) {
+      setLoginError(err?.message?.replace("Firebase: ", "") || "Sign in failed.");
+    } finally {
+      setLoginBusy(false);
+    }
+  };
+
+  const handleLogout = () => {
+    signOut(auth).catch(() => {});
+  };
+
 
   // Workout completed sets history
   const [completedSetsHistory, setCompletedSetsHistory] = useState<Record<string, Record<string, boolean[]>>>(() => {
@@ -290,20 +387,11 @@ export default function App() {
     setViewedDayNum(selectedDayOfWeek);
   }, [selectedDate, selectedDayOfWeek]);
 
-  const currentWorkoutDayIndex = (() => {
-    if (currentViewedDayNum === 0 || currentViewedDayNum === 6) {
-      return -1; // Rest Day
-    }
-    return currentViewedDayNum - 1; // 1 -> 0, 2 -> 1, 3 -> 2, 4 -> 3, 5 -> 4
-  })();
+  // Which workout applies to the selected date - manually chosen (not tied to weekday),
+  // so it works with a rotating/irregular shift schedule. -1 means "Rest / not set".
+  const currentWorkoutDayIndex = workoutDaySelections[selectedDate] ?? -1;
 
-  const isWorkoutTabLocked = isLocked || (currentViewedDayNum !== selectedDayOfWeek);
-
-  useEffect(() => {
-    if (currentViewedDayNum >= 1 && currentViewedDayNum <= 5) {
-      setWorkoutDayIndex(currentViewedDayNum - 1);
-    }
-  }, [currentViewedDayNum]);
+  const isWorkoutTabLocked = isLocked;
 
   // --- STREAK CALCULATION LOGIC ---
   
@@ -402,8 +490,72 @@ export default function App() {
   // --- ACTIONS ---
   
   // Adjust Weights Action
+  // --- WORKOUT SCHEDULE EDITOR ACTIONS ---
+  const updateWorkoutDayField = (dayIdx: number, field: "dayName" | "focusTitle", value: string) => {
+    setCustomWorkouts(prev => prev.map((wd, i) => i === dayIdx ? { ...wd, [field]: value } : wd));
+  };
+
+  const updateExerciseField = (dayIdx: number, exIdx: number, field: keyof Exercise, value: string | number) => {
+    setCustomWorkouts(prev => prev.map((wd, i) => {
+      if (i !== dayIdx) return wd;
+      const exercises = wd.exercises.map((ex, j) => {
+        if (j !== exIdx) return ex;
+        if (field === "sets") {
+          const setsNum = Math.max(1, Number(value) || 1);
+          return { ...ex, sets: setsNum, completedSets: Array(setsNum).fill(false) };
+        }
+        return { ...ex, [field]: value };
+      });
+      return { ...wd, exercises };
+    }));
+  };
+
+  const addExerciseToDay = (dayIdx: number) => {
+    setCustomWorkouts(prev => prev.map((wd, i) => {
+      if (i !== dayIdx) return wd;
+      const newEx: Exercise = {
+        id: `custom_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        name: "New Exercise",
+        sets: 3,
+        reps: "10 Reps",
+        defaultWeight: 0,
+        weight: 0,
+        completedSets: [false, false, false]
+      };
+      return { ...wd, exercises: [...wd.exercises, newEx] };
+    }));
+  };
+
+  const removeExerciseFromDay = (dayIdx: number, exIdx: number) => {
+    setCustomWorkouts(prev => prev.map((wd, i) => {
+      if (i !== dayIdx) return wd;
+      return { ...wd, exercises: wd.exercises.filter((_, j) => j !== exIdx) };
+    }));
+  };
+
+  const addWorkoutDay = () => {
+    setCustomWorkouts(prev => [...prev, {
+      dayName: `Day ${prev.length + 1}`,
+      focusTitle: "New Focus",
+      exercises: []
+    }]);
+  };
+
+  const removeWorkoutDay = (dayIdx: number) => {
+    setCustomWorkouts(prev => prev.filter((_, i) => i !== dayIdx));
+    // Clear any date selections pointing at the removed day or reindex ones after it
+    setWorkoutDaySelections(prev => {
+      const updated: Record<string, number> = {};
+      Object.entries(prev).forEach(([date, idx]) => {
+        if (idx === dayIdx) return; // drop selection for the deleted day
+        updated[date] = idx > dayIdx ? idx - 1 : idx;
+      });
+      return updated;
+    });
+  };
+
   const openAdjustWeightsModal = (dayIndex: number) => {
-    const currentExercises = DEFAULT_WORKOUTS[dayIndex].exercises;
+    const currentExercises = customWorkouts[dayIndex].exercises;
     const initialTemp: Record<string, string> = {};
     currentExercises.forEach(ex => {
       initialTemp[ex.id] = String(exerciseWeights[ex.id] ?? ex.defaultWeight);
@@ -802,6 +954,54 @@ export default function App() {
     });
   };
 
+  // Show a lightweight sign-in screen when Firebase is configured and no one's signed in yet.
+  // Skipped entirely (falls straight through to the app on local storage only) until you add real
+  // Firebase config values, so this never blocks you from using the app.
+  if (isFirebaseConfigured && cloudAuthChecked && !cloudUser) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6 font-sans">
+        <form onSubmit={handleLogin} className="w-full max-w-sm bg-slate-900/60 border border-slate-800 rounded-2xl p-8 shadow-2xl space-y-5">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/20">
+              <Shield className="w-6 h-6 text-white" />
+            </div>
+            <h1 className="text-lg font-bold font-display text-white">Virtue Tracker</h1>
+          </div>
+          <p className="text-xs text-slate-400">Sign in with the account you created in Firebase to sync across your devices.</p>
+          <div className="space-y-3">
+            <input
+              type="email"
+              value={loginEmail}
+              onChange={(e) => setLoginEmail(e.target.value)}
+              placeholder="Email"
+              autoCapitalize="none"
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-emerald-500"
+              required
+            />
+            <input
+              type="password"
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              placeholder="Password"
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-emerald-500"
+              required
+            />
+          </div>
+          {loginError && (
+            <p className="text-xs text-red-400 bg-red-950/30 border border-red-500/20 rounded-lg px-3 py-2">{loginError}</p>
+          )}
+          <button
+            type="submit"
+            disabled={loginBusy}
+            className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition disabled:opacity-50"
+          >
+            {loginBusy ? "Signing in..." : "Sign In"}
+          </button>
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative overflow-x-hidden pb-12 selection:bg-emerald-500/30 selection:text-white">
       {/* --- HEADER --- */}
@@ -833,6 +1033,17 @@ export default function App() {
             <div className="w-[1px] h-10 bg-slate-800 hidden lg:block"></div>
 
             <div className="flex flex-wrap items-center gap-2.5">
+              {/* Cloud Sync Status */}
+              {isFirebaseConfigured && cloudUser && (
+                <button
+                  onClick={handleLogout}
+                  title={`Signed in as ${cloudUser.email}. Tap to sign out.`}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-950/20 hover:bg-emerald-950/40 text-xs text-emerald-400 border border-emerald-500/20 transition"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  Synced
+                </button>
+              )}
               {/* Export / Import */}
               <button 
                 onClick={exportData}
@@ -1126,68 +1337,49 @@ export default function App() {
               transition={{ duration: 0.2 }}
               className="space-y-6"
             >
-              {/* Day Selection Row (Interactive other days, locked workout days) */}
-              <div className="flex flex-col items-center gap-2 max-w-md mx-auto">
-                <div className="flex justify-center gap-1.5 p-1 bg-slate-950/60 rounded-2xl border border-slate-800/80 w-full">
-                  {[
-                    { name: "Monday", short: "Mo", dayNum: 1 },
-                    { name: "Tuesday", short: "Tu", dayNum: 2 },
-                    { name: "Wednesday", short: "We", dayNum: 3 },
-                    { name: "Thursday", short: "Th", dayNum: 4 },
-                    { name: "Friday", short: "Fr", dayNum: 5 },
-                    { name: "Saturday", short: "Sa", dayNum: 6 },
-                    { name: "Sunday", short: "Su", dayNum: 0 },
-                  ].map((d) => {
-                    const isWorkoutDay = d.dayNum >= 1 && d.dayNum <= 5;
-                    const isActualToday = d.dayNum === selectedDayOfWeek;
-                    const isSelectedView = d.dayNum === currentViewedDayNum;
-                    
-                    const isClickable = true;
-
+              {/* Workout Day Picker - choose which schedule day applies today, independent of the calendar weekday */}
+              <div className="flex flex-col items-center gap-2 max-w-2xl mx-auto">
+                <div className="flex flex-wrap justify-center gap-1.5 p-1 bg-slate-950/60 rounded-2xl border border-slate-800/80 w-full">
+                  {customWorkouts.map((wd, idx) => {
+                    const isSelected = currentWorkoutDayIndex === idx;
                     return (
                       <button
-                        key={d.name}
-                        onClick={() => {
-                          setViewedDayNum(d.dayNum);
-                        }}
-                        className={`flex-1 py-2 text-center rounded-xl font-medium text-xs transition-all flex flex-col items-center justify-center relative ${
-                          isSelectedView
+                        key={idx}
+                        onClick={() => !isLocked && setWorkoutDaySelections(prev => ({ ...prev, [selectedDate]: idx }))}
+                        disabled={isLocked}
+                        title={wd.focusTitle}
+                        className={`flex-1 min-w-[76px] py-2.5 px-2 text-center rounded-xl font-medium text-xs transition-all ${
+                          isSelected
                             ? "bg-emerald-600 text-white shadow-lg font-bold"
-                            : "bg-slate-900/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-slate-800/60 cursor-pointer"
-                        }`}
-                        title={
-                          isActualToday
-                            ? "Active logging day"
-                            : isWorkoutDay
-                              ? "Click to view workout routine (Locked)"
-                              : "Click to view rest day"
-                        }
+                            : "bg-slate-900/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-slate-800/60"
+                        } ${isLocked ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
                       >
-                        <span>{d.short}</span>
-                        {isActualToday && (
-                          <Lock className="w-2.5 h-2.5 mt-0.5 text-yellow-400 opacity-80" />
-                        )}
+                        {wd.dayName || `Day ${idx + 1}`}
                       </button>
                     );
                   })}
+                  <button
+                    onClick={() => !isLocked && setWorkoutDaySelections(prev => ({ ...prev, [selectedDate]: -1 }))}
+                    disabled={isLocked}
+                    className={`flex-1 min-w-[76px] py-2.5 px-2 text-center rounded-xl font-medium text-xs transition-all ${
+                      currentWorkoutDayIndex === -1
+                        ? "bg-slate-700 text-white shadow-lg font-bold"
+                        : "bg-slate-900/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-slate-800/60"
+                    } ${isLocked ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
+                  >
+                    Rest
+                  </button>
                 </div>
-                <p className="text-[10px] text-slate-500 font-mono flex items-center gap-1 uppercase tracking-wider">
-                  <Lock className="w-3 h-3 text-emerald-500/70" />
-                  Locked to {new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: 'long' })}
+                <p className="text-[10px] text-slate-500 font-mono flex items-center gap-1 uppercase tracking-wider text-center">
+                  {isLocked ? (
+                    <>
+                      <Lock className="w-3 h-3 text-slate-500" /> Viewing {new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: 'long', month: 'short', day: 'numeric' })} (read-only)
+                    </>
+                  ) : (
+                    <>Pick today's workout — edit the schedule itself from Settings</>
+                  )}
                 </p>
               </div>
-
-              {/* View Only Information Banner */}
-              {isWorkoutTabLocked && currentViewedDayNum !== selectedDayOfWeek && (
-                <div className="p-4 rounded-xl bg-purple-950/20 border border-purple-500/20 text-purple-300 text-xs flex items-center justify-between gap-4 animate-fadeIn max-w-md mx-auto">
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-4 h-4 text-purple-400 flex-shrink-0" />
-                    <span>
-                      <strong>🔒 VIEWING ONLY</strong>: You are viewing a different day. Select the locked active day to log sets or adjust weights.
-                    </span>
-                  </div>
-                </div>
-              )}
 
               {currentWorkoutDayIndex === -1 ? (
                 <div className="bg-slate-900/40 rounded-2xl border border-slate-800 p-8 shadow-xl relative overflow-hidden transition-all duration-200">
@@ -1252,10 +1444,10 @@ export default function App() {
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
                     <div>
                       <span className="text-xs font-semibold text-emerald-400 uppercase tracking-widest font-mono">
-                        {DEFAULT_WORKOUTS[currentWorkoutDayIndex].dayName}
+                        {customWorkouts[currentWorkoutDayIndex].dayName}
                       </span>
                       <h2 className="text-xl md:text-2xl font-display font-bold text-white mt-1">
-                        {DEFAULT_WORKOUTS[currentWorkoutDayIndex].focusTitle}
+                        {customWorkouts[currentWorkoutDayIndex].focusTitle}
                       </h2>
                     </div>
 
@@ -1276,7 +1468,7 @@ export default function App() {
                   {/* Exercises Cards */}
                   <div className="space-y-5">
                     {(() => {
-                      const exercises = DEFAULT_WORKOUTS[currentWorkoutDayIndex].exercises;
+                      const exercises = customWorkouts[currentWorkoutDayIndex].exercises;
                       const grouped: Array<
                         | { type: "single"; exercise: typeof exercises[0] }
                         | { type: "superset"; exercises: typeof exercises }
@@ -1444,6 +1636,31 @@ export default function App() {
                       });
                     })()}
                   </div>
+
+                  {/* Mark Workout Complete */}
+                  {currentWorkoutDayIndex !== -1 && (
+                    <button
+                      onClick={() => toggleVirtue("Workout")}
+                      disabled={isLocked}
+                      className={`mt-6 w-full py-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
+                        dayProgress[selectedDate]?.virtues.includes("Workout")
+                          ? "bg-emerald-600 text-white shadow-lg shadow-emerald-900/20"
+                          : "bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-emerald-500/40"
+                      } ${isLocked ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                    >
+                      {dayProgress[selectedDate]?.virtues.includes("Workout") ? (
+                        <>
+                          <Check className="w-5 h-5 stroke-[3]" />
+                          Workout Complete
+                        </>
+                      ) : (
+                        <>
+                          <Dumbbell className="w-5 h-5" />
+                          Mark Workout Complete
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
               )}
             </motion.div>
@@ -1794,6 +2011,29 @@ export default function App() {
                 </div>
 
               </div>
+
+              {/* Mark Daily Review Complete */}
+              <button
+                onClick={() => toggleVirtue("Daily Review")}
+                disabled={isLocked}
+                className={`lg:col-span-2 py-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
+                  dayProgress[selectedDate]?.virtues.includes("Daily Review")
+                    ? "bg-emerald-600 text-white shadow-lg shadow-emerald-900/20"
+                    : "bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-emerald-500/40"
+                } ${isLocked ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+              >
+                {dayProgress[selectedDate]?.virtues.includes("Daily Review") ? (
+                  <>
+                    <Check className="w-5 h-5 stroke-[3]" />
+                    Daily Review Complete
+                  </>
+                ) : (
+                  <>
+                    <BookOpen className="w-5 h-5" />
+                    Mark Daily Review Complete
+                  </>
+                )}
+              </button>
             </motion.div>
           )}
 
@@ -2224,6 +2464,103 @@ export default function App() {
                 </div>
               )}
 
+              {/* WORKOUT SCHEDULE EDITOR */}
+              <div className="bg-slate-900/40 rounded-2xl border border-slate-800 p-6 shadow-xl space-y-6 relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-emerald-500 to-teal-500" />
+
+                <div className="border-b border-slate-800 pb-4">
+                  <h2 className="text-lg font-bold font-display text-white flex items-center gap-2">
+                    <Dumbbell className="w-5 h-5 text-emerald-400" /> Workout Schedule Editor
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-1 max-w-2xl">
+                    Edit your workout days and exercises to match your actual schedule. Changes apply immediately — pick which day applies to today from the Workout tab.
+                  </p>
+                </div>
+
+                <div className="space-y-5">
+                  {customWorkouts.map((wd, dayIdx) => (
+                    <div key={dayIdx} className="p-4 rounded-xl bg-slate-950/40 border border-slate-800/60 space-y-4">
+                      <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+                        <input
+                          value={wd.dayName}
+                          onChange={(e) => updateWorkoutDayField(dayIdx, "dayName", e.target.value)}
+                          placeholder="Day name"
+                          className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-semibold focus:outline-none focus:border-emerald-500"
+                        />
+                        <input
+                          value={wd.focusTitle}
+                          onChange={(e) => updateWorkoutDayField(dayIdx, "focusTitle", e.target.value)}
+                          placeholder="Focus (e.g. Chest & Triceps)"
+                          className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-emerald-500"
+                        />
+                        <button
+                          onClick={() => removeWorkoutDay(dayIdx)}
+                          className="p-2 rounded-lg bg-red-950/30 hover:bg-red-950/50 text-red-400 border border-red-500/20 transition self-start sm:self-auto"
+                          title="Delete this day"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="space-y-2">
+                        {wd.exercises.map((ex, exIdx) => (
+                          <div key={ex.id} className="grid grid-cols-12 gap-2 items-center">
+                            <input
+                              value={ex.name}
+                              onChange={(e) => updateExerciseField(dayIdx, exIdx, "name", e.target.value)}
+                              placeholder="Exercise name"
+                              className="col-span-5 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                            />
+                            <input
+                              type="number"
+                              min={1}
+                              value={ex.sets}
+                              onChange={(e) => updateExerciseField(dayIdx, exIdx, "sets", e.target.value)}
+                              title="Number of sets"
+                              className="col-span-2 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white text-center focus:outline-none focus:border-emerald-500"
+                            />
+                            <input
+                              value={ex.reps}
+                              onChange={(e) => updateExerciseField(dayIdx, exIdx, "reps", e.target.value)}
+                              placeholder="Reps (e.g. 10, 8, 8)"
+                              className="col-span-3 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-emerald-500"
+                            />
+                            <input
+                              type="number"
+                              value={ex.defaultWeight}
+                              onChange={(e) => updateExerciseField(dayIdx, exIdx, "defaultWeight", Number(e.target.value))}
+                              title="Default weight (lbs)"
+                              className="col-span-1 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-emerald-400 text-center focus:outline-none focus:border-emerald-500"
+                            />
+                            <button
+                              onClick={() => removeExerciseFromDay(dayIdx, exIdx)}
+                              className="col-span-1 p-1.5 rounded-lg bg-slate-900 hover:bg-red-950/40 text-slate-500 hover:text-red-400 border border-slate-700 hover:border-red-500/30 transition flex items-center justify-center"
+                              title="Remove exercise"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+
+                      <button
+                        onClick={() => addExerciseToDay(dayIdx)}
+                        className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1.5 bg-emerald-500/5 hover:bg-emerald-500/10 px-3 py-1.5 rounded-lg border border-emerald-500/20 transition"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> Add Exercise
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  onClick={addWorkoutDay}
+                  className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-emerald-500/40 text-sm font-semibold flex items-center justify-center gap-2 transition"
+                >
+                  <Plus className="w-4 h-4" /> Add Workout Day
+                </button>
+              </div>
+
               {/* INITIAL STREAKS SETUP */}
               <div className="bg-slate-900/40 rounded-2xl border border-slate-800 p-6 shadow-xl space-y-6 relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-blue-500 to-indigo-500" />
@@ -2644,7 +2981,7 @@ export default function App() {
                   Update the persistent weights for exercises in today's routine.
                 </p>
 
-                {DEFAULT_WORKOUTS[workoutDayIndex].exercises.map(ex => (
+                {customWorkouts[workoutDayIndex].exercises.map(ex => (
                   <div key={ex.id} className="space-y-1.5 p-4 rounded-xl bg-slate-900/30 border border-slate-800/60">
                     <label className="text-xs font-bold text-slate-400 uppercase tracking-wider font-mono">
                       {ex.name}
