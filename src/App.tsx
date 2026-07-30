@@ -109,80 +109,6 @@ export default function App() {
     localStorage.setItem("vt_workout_day_selections", JSON.stringify(workoutDaySelections));
   }, [workoutDaySelections]);
 
-  // --- CLOUD SYNC (Firebase) ---
-  const [cloudUser, setCloudUser] = useState<User | null>(null);
-  const [cloudAuthChecked, setCloudAuthChecked] = useState<boolean>(false);
-  const [loginEmail, setLoginEmail] = useState<string>("");
-  const [loginPassword, setLoginPassword] = useState<string>("");
-  const [loginError, setLoginError] = useState<string>("");
-  const [loginBusy, setLoginBusy] = useState<boolean>(false);
-  const hasLoadedCloudRef = useRef<boolean>(false);
-
-  // Watch sign-in state
-  useEffect(() => {
-    if (!isFirebaseConfigured) { setCloudAuthChecked(true); return; }
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setCloudUser(u);
-      setCloudAuthChecked(true);
-      hasLoadedCloudRef.current = false;
-    });
-    return () => unsub();
-  }, []);
-
-  // Pull: subscribe to this account's data doc and hydrate local state on every remote change
-  useEffect(() => {
-    if (!isFirebaseConfigured || !cloudUser) return;
-    const ref = doc(db, "users", cloudUser.uid, "appData", "state");
-    const unsub = onSnapshot(ref, (snap) => {
-      if (snap.exists()) {
-        const data = snap.data() as any;
-        if (data.dayProgress) setDayProgress(data.dayProgress);
-        if (data.exerciseWeights) setExerciseWeights(data.exerciseWeights);
-        if (data.completedSetsHistory) setCompletedSetsHistory(data.completedSetsHistory);
-        if (data.hspuLog) setHspuLog(data.hspuLog);
-        if (data.mindsetReviews) setMindsetReviews(data.mindsetReviews);
-        if (data.wholeLifeScores) setWholeLifeScores(data.wholeLifeScores);
-        if (data.initialStreaks) setInitialStreaks(data.initialStreaks);
-        if (data.customWorkouts) setCustomWorkouts(data.customWorkouts);
-        if (data.workoutDaySelections) setWorkoutDaySelections(data.workoutDaySelections);
-      }
-      hasLoadedCloudRef.current = true;
-    });
-    return () => unsub();
-  }, [cloudUser]);
-
-  // Push: whenever local data changes (after the initial cloud load), write it back up, debounced
-  useEffect(() => {
-    if (!isFirebaseConfigured || !cloudUser || !hasLoadedCloudRef.current) return;
-    const ref = doc(db, "users", cloudUser.uid, "appData", "state");
-    const t = setTimeout(() => {
-      setDoc(ref, {
-        dayProgress, exerciseWeights, completedSetsHistory, hspuLog,
-        mindsetReviews, wholeLifeScores, initialStreaks, customWorkouts, workoutDaySelections,
-        updatedAt: new Date().toISOString()
-      }).catch(() => {});
-    }, 800);
-    return () => clearTimeout(t);
-  }, [cloudUser, dayProgress, exerciseWeights, completedSetsHistory, hspuLog, mindsetReviews, wholeLifeScores, initialStreaks, customWorkouts, workoutDaySelections]);
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoginError("");
-    setLoginBusy(true);
-    try {
-      await signInWithEmailAndPassword(auth, loginEmail.trim(), loginPassword);
-    } catch (err: any) {
-      setLoginError(err?.message?.replace("Firebase: ", "") || "Sign in failed.");
-    } finally {
-      setLoginBusy(false);
-    }
-  };
-
-  const handleLogout = () => {
-    signOut(auth).catch(() => {});
-  };
-
-
   // Workout completed sets history
   const [completedSetsHistory, setCompletedSetsHistory] = useState<Record<string, Record<string, boolean[]>>>(() => {
     const saved = localStorage.getItem("vt_completed_sets");
@@ -374,6 +300,79 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("vt_initial_streaks", JSON.stringify(initialStreaks));
   }, [initialStreaks]);
+
+  // --- CLOUD SYNC (Firebase) ---
+  const [cloudUser, setCloudUser] = useState<User | null>(null);
+  const [cloudAuthChecked, setCloudAuthChecked] = useState<boolean>(false);
+  const [loginEmail, setLoginEmail] = useState<string>("");
+  const [loginPassword, setLoginPassword] = useState<string>("");
+  const [loginError, setLoginError] = useState<string>("");
+  const [loginBusy, setLoginBusy] = useState<boolean>(false);
+  const hasLoadedCloudRef = useRef<boolean>(false);
+
+  // Watch sign-in state
+  useEffect(() => {
+    if (!isFirebaseConfigured) { setCloudAuthChecked(true); return; }
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setCloudUser(u);
+      setCloudAuthChecked(true);
+      hasLoadedCloudRef.current = false;
+    });
+    return () => unsub();
+  }, []);
+
+  // Pull: subscribe to this account's data doc and hydrate local state on every remote change
+  useEffect(() => {
+    if (!isFirebaseConfigured || !cloudUser) return;
+    const ref = doc(db, "users", cloudUser.uid, "appData", "state");
+    const unsub = onSnapshot(ref, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as any;
+        if (data.dayProgress) setDayProgress(data.dayProgress);
+        if (data.exerciseWeights) setExerciseWeights(data.exerciseWeights);
+        if (data.completedSetsHistory) setCompletedSetsHistory(data.completedSetsHistory);
+        if (data.hspuLog) setHspuLog(data.hspuLog);
+        if (data.mindsetReviews) setMindsetReviews(data.mindsetReviews);
+        if (data.wholeLifeScores) setWholeLifeScores(data.wholeLifeScores);
+        if (data.initialStreaks) setInitialStreaks(data.initialStreaks);
+        if (data.customWorkouts) setCustomWorkouts(data.customWorkouts);
+        if (data.workoutDaySelections) setWorkoutDaySelections(data.workoutDaySelections);
+      }
+      hasLoadedCloudRef.current = true;
+    });
+    return () => unsub();
+  }, [cloudUser]);
+
+  // Push: whenever local data changes (after the initial cloud load), write it back up, debounced
+  useEffect(() => {
+    if (!isFirebaseConfigured || !cloudUser || !hasLoadedCloudRef.current) return;
+    const ref = doc(db, "users", cloudUser.uid, "appData", "state");
+    const t = setTimeout(() => {
+      setDoc(ref, {
+        dayProgress, exerciseWeights, completedSetsHistory, hspuLog,
+        mindsetReviews, wholeLifeScores, initialStreaks, customWorkouts, workoutDaySelections,
+        updatedAt: new Date().toISOString()
+      }).catch(() => {});
+    }, 800);
+    return () => clearTimeout(t);
+  }, [cloudUser, dayProgress, exerciseWeights, completedSetsHistory, hspuLog, mindsetReviews, wholeLifeScores, initialStreaks, customWorkouts, workoutDaySelections]);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError("");
+    setLoginBusy(true);
+    try {
+      await signInWithEmailAndPassword(auth, loginEmail.trim(), loginPassword);
+    } catch (err: any) {
+      setLoginError(err?.message?.replace("Firebase: ", "") || "Sign in failed.");
+    } finally {
+      setLoginBusy(false);
+    }
+  };
+
+  const handleLogout = () => {
+    signOut(auth).catch(() => {});
+  };
 
   const selectedDayOfWeek = (() => {
     const d = new Date(selectedDate + "T12:00:00");
