@@ -12,5 +12,14 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore'],
+          },
+        },
+      },
+    },
   };
 });
