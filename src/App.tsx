@@ -235,10 +235,6 @@ export default function App() {
     return defaultObj;
   });
 
-  const [tempSobrietyDate, setTempSobrietyDate] = useState<string>(() => {
-    return initialStreaks?.sobrietyDate || "";
-  });
-
   useEffect(() => {
     const vObj: Record<string, number> = {};
     VIRTUES.forEach(v => {
@@ -251,8 +247,6 @@ export default function App() {
       viObj[v] = initialStreaks.vices[v] || 0;
     });
     setTempInitialVices(viObj);
-
-    setTempSobrietyDate(initialStreaks.sobrietyDate || "");
   }, [initialStreaks]);
 
   // Modals state
@@ -309,6 +303,7 @@ export default function App() {
   const [loginError, setLoginError] = useState<string>("");
   const [loginBusy, setLoginBusy] = useState<boolean>(false);
   const hasLoadedCloudRef = useRef<boolean>(false);
+  const suppressPullUntilRef = useRef<number>(0);
 
   // Watch sign-in state
   useEffect(() => {
@@ -321,12 +316,14 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // Pull: subscribe to this account's data doc and hydrate local state on every remote change
+  // Pull: subscribe to this account's data doc and hydrate local state on every remote change.
+  // Skips applying incoming data for a few seconds after we've just pushed a local change, so a
+  // slightly-stale read can't stomp on an edit you just made (e.g. saving something in Settings).
   useEffect(() => {
     if (!isFirebaseConfigured || !cloudUser) return;
     const ref = doc(db, "users", cloudUser.uid, "appData", "state");
     const unsub = onSnapshot(ref, (snap) => {
-      if (snap.exists()) {
+      if (snap.exists() && Date.now() >= suppressPullUntilRef.current) {
         const data = snap.data() as any;
         if (data.dayProgress) setDayProgress(data.dayProgress);
         if (data.exerciseWeights) setExerciseWeights(data.exerciseWeights);
@@ -347,6 +344,8 @@ export default function App() {
   useEffect(() => {
     if (!isFirebaseConfigured || !cloudUser || !hasLoadedCloudRef.current) return;
     const ref = doc(db, "users", cloudUser.uid, "appData", "state");
+    // Hold off applying anything pulled from the cloud until well after this write lands.
+    suppressPullUntilRef.current = Date.now() + 4000;
     const t = setTimeout(() => {
       setDoc(ref, {
         dayProgress, exerciseWeights, completedSetsHistory, hspuLog,
@@ -668,15 +667,28 @@ export default function App() {
     return streak;
   })();
 
-  const daysSober = (() => {
+  const sobrietyBreakdown = (() => {
     if (!initialStreaks?.sobrietyDate) return null;
     try {
-      const sobriety = new Date(initialStreaks.sobrietyDate + "T00:00:00");
+      const start = new Date(initialStreaks.sobrietyDate + "T00:00:00");
       const estTodayStr = getEstTodayString();
       const today = new Date(estTodayStr + "T00:00:00");
-      const diffTime = today.getTime() - sobriety.getTime();
-      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-      return Math.max(0, diffDays);
+      if (isNaN(start.getTime()) || today < start) return null;
+
+      let years = today.getFullYear() - start.getFullYear();
+      let months = today.getMonth() - start.getMonth();
+      let days = today.getDate() - start.getDate();
+      if (days < 0) {
+        months -= 1;
+        const prevMonthLastDay = new Date(today.getFullYear(), today.getMonth(), 0).getDate();
+        days += prevMonthLastDay;
+      }
+      if (months < 0) {
+        years -= 1;
+        months += 12;
+      }
+      const totalDays = Math.max(0, Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)));
+      return { years, months, days, totalDays };
     } catch (e) {
       return null;
     }
@@ -1065,16 +1077,37 @@ export default function App() {
               <div className="px-3 py-1.5 rounded-lg bg-slate-900 text-xs border border-slate-800 font-mono text-slate-300">
                 {selectedDate}
               </div>
-              {daysSober !== null && (
-                <div className="px-3 py-1.5 rounded-lg bg-emerald-950/20 text-xs border border-emerald-500/20 font-mono font-bold text-emerald-400 flex items-center gap-1.5 shadow-md shadow-emerald-950/10">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                  Days Sober: <span className="text-emerald-300">{daysSober}</span>
-                </div>
-              )}
             </div>
           </div>
         </div>
       </header>
+
+      {/* --- RECOVERY COUNTER BANNER --- */}
+      {sobrietyBreakdown && (
+        <div className="bg-gradient-to-r from-emerald-950/40 via-emerald-900/20 to-emerald-950/40 border-b border-emerald-500/20 px-4 py-4">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-6 text-center">
+            <div className="flex items-center gap-2 text-emerald-400">
+              <Shield className="w-5 h-5" />
+              <span className="text-xs font-bold uppercase tracking-widest">Sober Since {new Date(initialStreaks.sobrietyDate + "T12:00:00").toLocaleDateString("en-US", { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+            </div>
+            <div className="flex items-baseline gap-4 sm:gap-6">
+              <div className="text-center">
+                <span className="text-2xl sm:text-3xl font-extrabold text-white font-display">{sobrietyBreakdown.years}</span>
+                <span className="text-xs text-emerald-300 font-bold uppercase ml-1">{sobrietyBreakdown.years === 1 ? "Year" : "Years"}</span>
+              </div>
+              <div className="text-center">
+                <span className="text-2xl sm:text-3xl font-extrabold text-white font-display">{sobrietyBreakdown.months}</span>
+                <span className="text-xs text-emerald-300 font-bold uppercase ml-1">{sobrietyBreakdown.months === 1 ? "Month" : "Months"}</span>
+              </div>
+              <div className="text-center">
+                <span className="text-2xl sm:text-3xl font-extrabold text-white font-display">{sobrietyBreakdown.days}</span>
+                <span className="text-xs text-emerald-300 font-bold uppercase ml-1">{sobrietyBreakdown.days === 1 ? "Day" : "Days"}</span>
+              </div>
+            </div>
+            <span className="text-[11px] text-emerald-500/70 font-mono">({sobrietyBreakdown.totalDays.toLocaleString()} days total)</span>
+          </div>
+        </div>
+      )}
 
       {/* --- SUB-BAR (ACTIVE TAB NAVIGATION) --- */}
       <div className="bg-slate-900/40 py-3 border-b border-slate-800 px-4">
@@ -2560,6 +2593,27 @@ export default function App() {
                 </button>
               </div>
 
+              {/* SOBRIETY DATE - simple, always-editable, saves immediately */}
+              <div className="bg-slate-900/40 rounded-2xl border border-slate-800 p-6 shadow-xl space-y-3 relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-emerald-500 to-teal-500" />
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <h2 className="text-lg font-bold font-display text-white flex items-center gap-2">
+                      <Shield className="w-5 h-5 text-emerald-400" /> Sobriety Date
+                    </h2>
+                    <p className="text-xs text-slate-400 max-w-2xl">
+                      Powers the counter at the top of the app. Saves instantly — change it anytime.
+                    </p>
+                  </div>
+                  <input
+                    type="date"
+                    value={initialStreaks.sobrietyDate || ""}
+                    onChange={e => setInitialStreaks(prev => ({ ...prev, sobrietyDate: e.target.value }))}
+                    className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 text-center font-mono cursor-pointer"
+                  />
+                </div>
+              </div>
+
               {/* INITIAL STREAKS SETUP */}
               <div className="bg-slate-900/40 rounded-2xl border border-slate-800 p-6 shadow-xl space-y-6 relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-blue-500 to-indigo-500" />
@@ -2632,43 +2686,6 @@ export default function App() {
                   </div>
                 )}
 
-                {/* CUSTOM INLINE LOCK CONFIRMATION */}
-                {showLockConfirm && (
-                  <div className="p-4 rounded-xl bg-slate-950/80 border border-blue-500/30 text-blue-300 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fadeIn">
-                    <div className="flex items-start gap-2.5">
-                      <Lock className="w-4 h-4 text-blue-400 mt-0.5 flex-shrink-0 animate-pulse" />
-                      <div>
-                        <strong className="text-white font-medium block">Lock Initial Streaks?</strong>
-                        Are you sure you want to save and lock these initial starting streaks?
-                      </div>
-                    </div>
-                    <div className="flex gap-2 self-end sm:self-auto">
-                      <button
-                        onClick={() => setShowLockConfirm(false)}
-                        className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-850 text-slate-300 font-medium transition cursor-pointer text-xs"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={() => {
-                          setInitialStreaks({
-                            virtues: tempInitialVirtues,
-                            vices: tempInitialVices,
-                            sobrietyDate: tempSobrietyDate,
-                            setupCompleted: true
-                          });
-                          setShowLockConfirm(false);
-                          setSettingsSuccessMessage("Initial streaks setup locked and active!");
-                          setTimeout(() => setSettingsSuccessMessage(""), 5000);
-                        }}
-                        className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold transition cursor-pointer text-xs shadow-md shadow-blue-900/20"
-                      >
-                        Confirm Save & Lock
-                      </button>
-                    </div>
-                  </div>
-                )}
-
                 {initialStreaks.setupCompleted && (
                   <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-500/10 text-emerald-300 text-xs flex items-start gap-3">
                     <Lock className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
@@ -2678,29 +2695,6 @@ export default function App() {
                     </div>
                   </div>
                 )}
-
-                {/* SOBRIETY DATE SETUP */}
-                <div className="p-4 rounded-xl bg-slate-950/40 border border-slate-800/60 space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="space-y-1">
-                      <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider font-mono flex items-center gap-2">
-                        <Shield className="w-4 h-4 text-emerald-400" /> Sobriety Date Setup
-                      </h3>
-                      <p className="text-xs text-slate-400">
-                        Enter your sobriety date to track and display your "Days Sober" in the header.
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="date"
-                        disabled={initialStreaks.setupCompleted}
-                        value={initialStreaks.setupCompleted ? (initialStreaks.sobrietyDate || "") : tempSobrietyDate}
-                        onChange={e => setTempSobrietyDate(e.target.value)}
-                        className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500 text-center font-mono disabled:opacity-70 disabled:border-slate-850 cursor-pointer"
-                      />
-                    </div>
-                  </div>
-                </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   {/* VIRTUES INITIAL DAYS */}
@@ -2786,12 +2780,12 @@ export default function App() {
                           </button>
                           <button
                             onClick={() => {
-                              setInitialStreaks({
+                              setInitialStreaks(prev => ({
+                                ...prev,
                                 virtues: tempInitialVirtues,
                                 vices: tempInitialVices,
-                                sobrietyDate: tempSobrietyDate,
                                 setupCompleted: true
-                              });
+                              }));
                               setShowLockConfirm(false);
                               setSettingsSuccessMessage("Initial streaks setup locked and active!");
                               setTimeout(() => setSettingsSuccessMessage(""), 5000);
