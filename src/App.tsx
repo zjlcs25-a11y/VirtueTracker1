@@ -470,9 +470,24 @@ export default function App() {
     });
   };
 
-  // Positive affirmation popup + green screen flash, shown when marking something complete (not when un-marking)
-  const [celebration, setCelebration] = useState<{ title: string; message: string } | null>(null);
-  const celebrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Positive affirmation + green shading, shown when marking something complete (not when un-marking).
+  // Persisted per date+virtue so it stays visible if you navigate away and come back, or reload the app -
+  // only clears if you dismiss it or un-mark the item.
+  const [celebrationRecords, setCelebrationRecords] = useState<Record<string, { title: string; message: string }>>(() => {
+    const saved = localStorage.getItem("vt_celebration_records");
+    return saved ? JSON.parse(saved) : {};
+  });
+  useEffect(() => {
+    localStorage.setItem("vt_celebration_records", JSON.stringify(celebrationRecords));
+  }, [celebrationRecords]);
+
+  const [celebrationDismissed, setCelebrationDismissed] = useState<Record<string, boolean>>(() => {
+    const saved = localStorage.getItem("vt_celebration_dismissed");
+    return saved ? JSON.parse(saved) : {};
+  });
+  useEffect(() => {
+    localStorage.setItem("vt_celebration_dismissed", JSON.stringify(celebrationDismissed));
+  }, [celebrationDismissed]);
 
   const AFFIRMATIONS: Record<string, { title: string; messages: string[] }> = {
     "Workout": {
@@ -498,18 +513,43 @@ export default function App() {
   };
 
   const celebrateToggleVirtue = (virtue: string) => {
+    const key = `${selectedDate}::${virtue}`;
     const alreadyDone = dayProgress[selectedDate]?.virtues.includes(virtue);
     toggleVirtue(virtue);
     if (!alreadyDone) {
       const config = AFFIRMATIONS[virtue];
       if (config) {
         const message = config.messages[Math.floor(Math.random() * config.messages.length)];
-        setCelebration({ title: config.title, message });
-        if (celebrationTimerRef.current) clearTimeout(celebrationTimerRef.current);
-        celebrationTimerRef.current = setTimeout(() => setCelebration(null), 2800);
+        setCelebrationRecords(prev => ({ ...prev, [key]: { title: config.title, message } }));
+        setCelebrationDismissed(prev => {
+          if (!(key in prev)) return prev;
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
       }
+    } else {
+      // Un-marking clears its celebration too
+      setCelebrationDismissed(prev => ({ ...prev, [key]: true }));
     }
   };
+
+  const dismissCelebration = (key: string) => {
+    setCelebrationDismissed(prev => ({ ...prev, [key]: true }));
+  };
+
+  // Celebrations to show for whichever date is currently being viewed
+  const activeCelebrations = ["Workout", "Daily Review"]
+    .map(virtue => {
+      const key = `${selectedDate}::${virtue}`;
+      const isDone = dayProgress[selectedDate]?.virtues.includes(virtue);
+      const record = celebrationRecords[key];
+      if (isDone && record && !celebrationDismissed[key]) {
+        return { key, ...record };
+      }
+      return null;
+    })
+    .filter((c): c is { key: string; title: string; message: string } => c !== null);
 
   // Toggle vice for active date - locked to current EST date
   const toggleVice = (vice: string) => {
@@ -1052,38 +1092,40 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative overflow-x-hidden pb-12 selection:bg-emerald-500/30 selection:text-white">
-      {/* --- COMPLETION CELEBRATION --- */}
+      {/* --- COMPLETION CELEBRATION (persists until dismissed or un-marked) --- */}
+      {activeCelebrations.length > 0 && (
+        <div className="fixed inset-0 z-[200] pointer-events-none bg-emerald-500/[0.07]" />
+      )}
       <AnimatePresence>
-        {celebration && (
-          <React.Fragment>
-            <motion.div
-              key="celebration-flash"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.4 }}
-              className="fixed inset-0 z-[200] pointer-events-none bg-emerald-500/20"
-            />
-            <motion.div
-              key="celebration-card"
-              initial={{ opacity: 0, y: 30, scale: 0.9 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 20, scale: 0.95 }}
-              transition={{ type: "spring", stiffness: 300, damping: 22 }}
-              onClick={() => setCelebration(null)}
-              className="fixed inset-x-4 bottom-8 sm:inset-x-0 sm:w-full flex justify-center z-[210] cursor-pointer"
-            >
-              <div className="max-w-sm w-full bg-slate-900 border border-emerald-500/40 rounded-2xl shadow-2xl shadow-emerald-950/40 px-6 py-5 flex items-center gap-4">
+        {activeCelebrations.length > 0 && (
+          <div className="fixed inset-x-4 bottom-8 sm:inset-x-0 z-[210] flex flex-col items-center gap-2">
+            {activeCelebrations.map(c => (
+              <motion.div
+                key={c.key}
+                layout
+                initial={{ opacity: 0, y: 30, scale: 0.9 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 20, scale: 0.95 }}
+                transition={{ type: "spring", stiffness: 300, damping: 22 }}
+                className="max-w-sm w-full bg-slate-900 border border-emerald-500/40 rounded-2xl shadow-2xl shadow-emerald-950/40 px-5 py-4 flex items-center gap-4"
+              >
                 <div className="w-11 h-11 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0 shadow-lg shadow-emerald-500/30">
                   <Check className="w-6 h-6 text-white stroke-[3]" />
                 </div>
-                <div>
-                  <p className="text-sm font-bold text-emerald-400 font-display">{celebration.title}</p>
-                  <p className="text-xs text-slate-300 mt-0.5">{celebration.message}</p>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-emerald-400 font-display">{c.title}</p>
+                  <p className="text-xs text-slate-300 mt-0.5">{c.message}</p>
                 </div>
-              </div>
-            </motion.div>
-          </React.Fragment>
+                <button
+                  onClick={() => dismissCelebration(c.key)}
+                  className="text-slate-500 hover:text-slate-300 transition flex-shrink-0"
+                  title="Dismiss"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </motion.div>
+            ))}
+          </div>
         )}
       </AnimatePresence>
 
