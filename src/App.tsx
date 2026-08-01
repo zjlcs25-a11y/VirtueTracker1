@@ -470,6 +470,47 @@ export default function App() {
     });
   };
 
+  // Positive affirmation popup + green screen flash, shown when marking something complete (not when un-marking)
+  const [celebration, setCelebration] = useState<{ title: string; message: string } | null>(null);
+  const celebrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const AFFIRMATIONS: Record<string, { title: string; messages: string[] }> = {
+    "Workout": {
+      title: "Workout Complete!",
+      messages: [
+        "Your future self just said thank you.",
+        "Strength is built one session at a time — that was one.",
+        "Showing up is the hard part. You showed up.",
+        "That's discipline in action. Well done.",
+        "Every rep counts. You're building something real.",
+      ],
+    },
+    "Daily Review": {
+      title: "Daily Review Complete!",
+      messages: [
+        "Self-reflection is a superpower. You used it today.",
+        "Taking stock of your day keeps you moving in the right direction.",
+        "That kind of intentionality compounds over time.",
+        "Awareness today, growth tomorrow. Nice work.",
+        "You showed up for yourself today.",
+      ],
+    },
+  };
+
+  const celebrateToggleVirtue = (virtue: string) => {
+    const alreadyDone = dayProgress[selectedDate]?.virtues.includes(virtue);
+    toggleVirtue(virtue);
+    if (!alreadyDone) {
+      const config = AFFIRMATIONS[virtue];
+      if (config) {
+        const message = config.messages[Math.floor(Math.random() * config.messages.length)];
+        setCelebration({ title: config.title, message });
+        if (celebrationTimerRef.current) clearTimeout(celebrationTimerRef.current);
+        celebrationTimerRef.current = setTimeout(() => setCelebration(null), 2800);
+      }
+    }
+  };
+
   // Toggle vice for active date - locked to current EST date
   const toggleVice = (vice: string) => {
     if (selectedDate !== getEstTodayString()) return;
@@ -1011,6 +1052,41 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative overflow-x-hidden pb-12 selection:bg-emerald-500/30 selection:text-white">
+      {/* --- COMPLETION CELEBRATION --- */}
+      <AnimatePresence>
+        {celebration && (
+          <React.Fragment>
+            <motion.div
+              key="celebration-flash"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.4 }}
+              className="fixed inset-0 z-[200] pointer-events-none bg-emerald-500/20"
+            />
+            <motion.div
+              key="celebration-card"
+              initial={{ opacity: 0, y: 30, scale: 0.9 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.95 }}
+              transition={{ type: "spring", stiffness: 300, damping: 22 }}
+              onClick={() => setCelebration(null)}
+              className="fixed inset-x-4 bottom-8 sm:inset-x-0 sm:w-full flex justify-center z-[210] cursor-pointer"
+            >
+              <div className="max-w-sm w-full bg-slate-900 border border-emerald-500/40 rounded-2xl shadow-2xl shadow-emerald-950/40 px-6 py-5 flex items-center gap-4">
+                <div className="w-11 h-11 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0 shadow-lg shadow-emerald-500/30">
+                  <Check className="w-6 h-6 text-white stroke-[3]" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-emerald-400 font-display">{celebration.title}</p>
+                  <p className="text-xs text-slate-300 mt-0.5">{celebration.message}</p>
+                </div>
+              </div>
+            </motion.div>
+          </React.Fragment>
+        )}
+      </AnimatePresence>
+
       {/* --- HEADER --- */}
       <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-40 px-4 py-4 md:px-8">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
@@ -1668,7 +1744,7 @@ export default function App() {
                   {/* Mark Workout Complete */}
                   {currentWorkoutDayIndex !== -1 && (
                     <button
-                      onClick={() => toggleVirtue("Workout")}
+                      onClick={() => celebrateToggleVirtue("Workout")}
                       disabled={isLocked}
                       className={`mt-6 w-full py-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
                         dayProgress[selectedDate]?.virtues.includes("Workout")
@@ -2042,7 +2118,7 @@ export default function App() {
 
               {/* Mark Daily Review Complete */}
               <button
-                onClick={() => toggleVirtue("Daily Review")}
+                onClick={() => celebrateToggleVirtue("Daily Review")}
                 disabled={isLocked}
                 className={`lg:col-span-2 py-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
                   dayProgress[selectedDate]?.virtues.includes("Daily Review")
