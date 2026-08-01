@@ -897,10 +897,6 @@ export default function App() {
             dayBg = "bg-rose-500 text-white shadow-md shadow-rose-500/25 border-rose-500/20";
             dayTextColor = "text-white font-bold";
           }
-        } else if (isPrior && !hasDataEntered) {
-          // Highlight prior day with no data as light orange
-          dayBg = "bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30";
-          dayTextColor = "text-amber-400 font-medium";
         }
       }
 
@@ -1719,7 +1715,7 @@ export default function App() {
                 <div className="space-y-3">
                   <p className="text-sm font-medium text-slate-300">1. One thing I can get excited about today is...</p>
                   <div className="grid grid-cols-2 gap-2">
-                    {["New Project", "Creative Work", "Working Out", "Self Help"].map(opt => (
+                    {["Working Out", "Self Help", "New Adventure", "Fun Activity"].map(opt => (
                       <button
                         key={opt}
                         onClick={() => handleMindsetChange("morning", "excited", opt)}
@@ -1758,8 +1754,8 @@ export default function App() {
                 {/* Q3 */}
                 <div className="space-y-3">
                   <p className="text-sm font-medium text-slate-300">3. Someone who needs me on my A-game today is...</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {["Friend", "Myself", "Family"].map(opt => (
+                  <div className="grid grid-cols-2 gap-2">
+                    {["Family", "Friend", "Myself", "Work Person"].map(opt => (
                       <button
                         key={opt}
                         onClick={() => handleMindsetChange("morning", "needsMe", opt)}
@@ -1890,7 +1886,7 @@ export default function App() {
                   <div className="space-y-3">
                     <p className="text-sm font-medium text-slate-300">1. A moment that I really appreciated today was...</p>
                     <div className="grid grid-cols-2 gap-2">
-                      {["Peace", "DHTC Progress", "Family Progress", "CBT Progress"].map(opt => (
+                      {["Peace", "Family Progress", "CBT Progress", "Great Day at Work"].map(opt => (
                         <button
                           key={opt}
                           onClick={() => handleMindsetChange("evening", "appreciated", opt)}
